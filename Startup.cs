@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -6,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Identity.Web;
 using Microsoft.Identity.Web.UI;
+using Microsoft.AspNetCore.Mvc.Authorization;
 
 namespace net5backendWithIdentityAndAD
 {
@@ -22,19 +24,30 @@ namespace net5backendWithIdentityAndAD
 
         public void ConfigureServices(IServiceCollection services)
         {
-            services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
-                .AddMicrosoftIdentityWebApp(Configuration.GetSection("AzureAd"));
+            string[] initialScopes = Configuration.GetValue<string>("DownstreamApi:Scopes")?.Split(' ');
 
-            services.AddAuthorization(options =>
+            services.AddAuthentication(OpenIdConnectDefaults.AuthenticationScheme)
+                    .AddMicrosoftIdentityWebApp(Configuration)
+                    .EnableTokenAcquisitionToCallDownstreamApi(initialScopes)
+                    .AddMicrosoftGraph(Configuration.GetSection("DownstreamApi"))
+                    .AddInMemoryTokenCaches();
+
+
+            var mvcBuilder = services.AddControllersWithViews(options =>
             {
-                // By default, all incoming requests will be authorized according to the default policy
-                options.FallbackPolicy = options.DefaultPolicy;
+                var policy = new AuthorizationPolicyBuilder()
+                    .RequireAuthenticatedUser()
+                    .Build();
+                options.Filters.Add(new AuthorizeFilter(policy));
             });
-            var mvcBuilder = services.AddControllersWithViews();
+
             if (Env.IsDevelopment())
                 mvcBuilder.AddRazorRuntimeCompilation();
             services.AddRazorPages()
                 .AddMicrosoftIdentityUI();
+
+            services.AddServerSideBlazor()
+               .AddMicrosoftIdentityConsentHandler();
         }
 
         public void Configure(IApplicationBuilder app)
@@ -61,7 +74,7 @@ namespace net5backendWithIdentityAndAD
             app.UseEndpoints(endpoints =>
             {
                 endpoints.MapRazorPages();
-                endpoints.MapControllers();
+                endpoints.MapControllerRoute("default", "/{controller=Home}/{action=Index}/{id?}");
             });
         }
     }
