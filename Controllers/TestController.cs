@@ -1,101 +1,54 @@
-﻿using Azure;
-using Azure.Identity;
-using Azure.Security.KeyVault.Secrets;
+﻿using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Microsoft.Graph;
 using Microsoft.Identity.Client;
 using Microsoft.Identity.Web;
 using net5backendWithIdentityAndAD.Models;
+using net5backendWithIdentityAndAD.Overrides;
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
 
-namespace WebApp_OpenIDConnect_DotNet_graph.Controllers
+namespace net5backendWithIdentityAndAD.Controllers
 {
     [Authorize]
     public class TestController : Controller
     {
-        private readonly ILogger<TestController> _logger;
-        private readonly GraphServiceClient _graphServiceClient;
-        private readonly MicrosoftIdentityConsentAndConditionalAccessHandler _consentHandler;
-        private string[] _graphScopes = new[] { "user.read" };
+        private readonly ITokenAcquisition tokenAcquisition;
+        private readonly WebOptions webOptions;
 
-        public TestController(ILogger<TestController> logger,
-                            IConfiguration configuration,
-                            GraphServiceClient graphServiceClient,
-                            MicrosoftIdentityConsentAndConditionalAccessHandler consentHandler)
+        public TestController(ITokenAcquisition tokenAcquisition, IOptions<WebOptions> webOptionValue)
         {
-            _logger = logger;
-            _graphServiceClient = graphServiceClient;
-            this._consentHandler = consentHandler;
-            // Capture the Scopes for Graph that were used in the original request for an Access token (AT) for MS Graph as
-            // they'd be needed again when requesting a fresh AT for Graph during claims challenge processing
-            _graphScopes = configuration.GetValue<string>("DownstreamApi:Scopes")?.Split(' ');
+
+            this.tokenAcquisition = tokenAcquisition;
+            webOptions = webOptionValue.Value;
         }
 
-        [AuthorizeForScopes(ScopeKeySection = "DownstreamApi:Scopes")]
+        [Authorize(Policy = "admin")]
+        //[AuthorizeForScopes(Scopes = new[] { "User.Read" })]
         public async Task<IActionResult> IndexAsync()
         {
-            User currentUser = null;
-
             try
             {
-                currentUser = await _graphServiceClient.Me.Request().GetAsync();
+                //Identity Data
+                var currentUser = HttpContext.User;
+                ViewData["Me"] = currentUser.Identity.Name;
+
+                //Graph Data            
+                GraphServiceClient graphClient = GetGraphServiceClient(new[] { "User.Read" });
+                var me = await graphClient.Me.Request().GetAsync();
+                ViewData["Me"] = me.DisplayName;
             }
-            // Catch CAE exception from Graph SDK
-            catch (ServiceException svcex) when (svcex.Message.Contains("Continuous access evaluation resulted in claims challenge"))
+            catch (Exception ex)
             {
-                try
-                {
-                    Console.WriteLine($"{svcex}");
-                    string claimChallenge = WwwAuthenticateParameters.GetClaimChallengeFromResponseHeaders(svcex.ResponseHeaders);
-                    _consentHandler.ChallengeUser(_graphScopes, claimChallenge);
-                    return new EmptyResult();
-                }
-                catch (Exception ex2)
-                {
-                    _consentHandler.HandleException(ex2);
-                }
-            }
-            ViewData["Me"] = currentUser.DisplayName;
+                return new ChallengeResult(OpenIdConnectDefaults.AuthenticationScheme);
+            }                      
+
             return View();
         }
 
-        [AuthorizeForScopes(ScopeKeySection = "DownstreamApi:Scopes")]
-        public async Task<IActionResult> Profile()
-        {
-            User currentUser = null;
-
-            try
-            {
-                currentUser = await _graphServiceClient.Me.Request().GetAsync();
-            }
-            // Catch CAE exception from Graph SDK
-            catch (ServiceException svcex) when (svcex.Message.Contains("Continuous access evaluation resulted in claims challenge"))
-            {
-                try
-                {
-                    Console.WriteLine($"{svcex}");
-                    string claimChallenge = WwwAuthenticateParameters.GetClaimChallengeFromResponseHeaders(svcex.ResponseHeaders);
-                    _consentHandler.ChallengeUser(_graphScopes, claimChallenge);
-                    return new EmptyResult();
-                }
-                catch (Exception ex2)
-                {
-                    _consentHandler.HandleException(ex2);
-                }
-            }
-            ViewData["Me"] = currentUser;
-            return View();
-        }
-
-        public IActionResult Privacy()
-        {
-            return View();
-        }
 
         [AllowAnonymous]
         [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
@@ -104,14 +57,13 @@ namespace WebApp_OpenIDConnect_DotNet_graph.Controllers
             return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
         }
 
-        private string GetSecretFromKeyVault()
+        private GraphServiceClient GetGraphServiceClient(string[] scopes)
         {
-            string uri = Environment.GetEnvironmentVariable("KEY_VAULT_URI");
-            SecretClient client = new SecretClient(new Uri(uri), new DefaultAzureCredential());
-
-            Response<KeyVaultSecret> secret = client.GetSecretAsync("Graph-App-Secret").Result;
-
-            return secret.Value.Value;
+            return GraphServiceClientFactory.GetAuthenticatedGraphClient(async () =>
+            {
+                string result = await tokenAcquisition.GetAccessTokenForUserAsync(scopes);
+                return result;
+            }, webOptions.GraphApiUrl);
         }
     }
 }
