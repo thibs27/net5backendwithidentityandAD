@@ -27,7 +27,7 @@ namespace net5backendWithIdentityAndAD.Controllers
         }
 
         [Authorize(Policy = "admin")]
-        //[AuthorizeForScopes(Scopes = new[] { "User.Read" })]
+        [AuthorizeForScopes(Scopes = new[] { "Application.ReadWrite.All" })]
         public async Task<IActionResult> IndexAsync()
         {
             try
@@ -37,7 +37,7 @@ namespace net5backendWithIdentityAndAD.Controllers
                 ViewData["Me"] = currentUser.Identity.Name;
 
                 //Graph Data            
-                GraphServiceClient graphClient = GetGraphServiceClient(new[] { "User.Read" });
+                GraphServiceClient graphClient = GetGraphServiceClient(new[] { "Application.ReadWrite.All" });
                 var me = await graphClient.Me.Request().GetAsync();
                 ViewData["Me"] = me.DisplayName;
             }
